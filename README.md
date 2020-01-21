@@ -1,2 +1,2 @@
 # AutomaticImageIndexing
-RÃ©alisez des indexations automatiques dâ€™images (python, openCV2)
+Réalisez des indexations automatiques d’images (python, openCV2)
