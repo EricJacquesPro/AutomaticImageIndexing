@@ -5,17 +5,78 @@ class AutomaticImageIndexing:
     import os
     import os.path
 
-    _version = '0.0'
+    #import progressbar
+    from sklearn.cluster import MiniBatchKMeans
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.svm import SVC
+
+    from xml.dom import minidom
+    
+    _version = '0.1'
     data_directory = "Data/"
+    
+    working_directory = '/'
+    annotation_directory = 'annotation/'
+    picture_directory = 'images/'
+    picture_extension = '.jpg'
+    slash = "/"
+    
+    n_limite_images = 0
+    
+    n_clusters = 10
+    
+    name_dict = {}
+    desc_list = []
+    
+    clf = None
     
     def __init__(self):
         self.data_directory = "Data/"
+        self.working_directory = '/'
+        self.annotation_directory = 'annotation/'
+        self.picture_directory = 'images/'
+        self.picture_extension = '.jpg'
+        self.slash = "/"
+        
+        self.name_dict = {}
+        self.desc_list = []
+        self.clf = self.SVC()
+        
+        self.n_clusters = 10
+        self.kmeans_obj = self.KMeans(n_clusters = self.n_clusters)
+        self.kmeans_ret = None#self.kmeans_obj.fit_predict(self.np.array([]))
         
     def version(self):
         '''
         Return the version of this class
         '''
         return self._version
+    
+    
+    def read_picture_and_shift_feature_generation(self):
+        label_count = 0
+
+        sift=self.cv.SIFT()
+        folder_list = self.os.listdir(''.join([self.working_directory, self.annotation_directory]))
+        for folder in folder_list:#[0:4]:# a retrier pour le traitement complet
+            self.name_dict[label_count] = folder
+            label_count = label_count + 1
+            print "Computing Features for ", folder
+            anotation_directory_path = ''.join([self.working_directory,self.annotation_directory,folder])
+            picture_directory_path = ''.join([self.working_directory,self.picture_directory,folder])
+            if self.n_limite_images > 0:
+                doc_list = self.os.listdir(anotation_directory_path)[0:self.n_limite_images]
+            else:
+                doc_list = self.os.listdir(anotation_directory_path)
+            for doc in doc_list:
+                picture_path = ''.join([picture_directory_path,self.slash,doc,self.picture_extension])
+                anotation_doc = self.minidom.parse(''.join([anotation_directory_path,self.slash,doc]))
+                items = anotation_doc.getElementsByTagName('object')
+                #if espece pas dans name_dict, on ajoute et on incremente label_count
+                self.desc_list = self.desc_list + self.read_descriptor_picture_from_annotation_file(picture_path, items)
+        #dictionary_size = len(self.desc_list)
+    
     
     def read_picture_from_annotation_file(self, picture_path, items):
         # total amount of items
@@ -29,8 +90,6 @@ class AutomaticImageIndexing:
                 row = []
                 image = self.read_picture_from_annotation_bndbox(picture_path, bndbox)
                 edges = self.canny_from_image(image)
-
-                print('apres canny')
                 is_gray = True
                 kp, desc = self.feature_sift_generation(image, is_gray)
                 row.append(kp)
@@ -51,7 +110,6 @@ class AutomaticImageIndexing:
                 image = self.read_picture_from_annotation_bndbox(picture_path, bndbox)
                 edges = self.canny_from_image(image)
 
-                print('apres canny')
                 is_gray = True
                 kp, desc = self.feature_sift_generation(image, is_gray)
                 #kp, desc = sift.detectAndCompute(gray,None)
@@ -282,6 +340,83 @@ class AutomaticImageIndexing:
 
         # Also return the image if you'd like a copy
         return out
+
+    def clusturing(self, n_clusters = None):
+        if n_clusters is not None:
+            self.n_clusters = n_clusters
+        self.kmeans_obj = self.KMeans(n_clusters = self.n_clusters)
+        self.kmeans_ret = self.kmeans_obj.fit_predict(self.np.array(self.desc_list))
+
+    def developVocabulary(self, n_images):
+        return developBagOfVisualWord(n_images)
+    
+    def developBagOfVisualWord(self, n_images):
+        mega_histogram = self.np.array([self.np.zeros(self.n_clusters) for i in range(n_images)])
+        old_count = 0
+        for i in range(n_images):
+            l = len(self.desc_list[i])
+            for j in range(l):
+                idx = self.kmeans_ret[old_count+j]
+                mega_histogram[i][idx] += 1
+            old_count += l
+        print "Vocabulary Histogram Generated"
+        return mega_histogram
+    #representer 1 cluster pour voir l'homogeneite?
+    #=>representation des descriptor du cluster
+
+    def plotHist(self, mega_histogram, n_clusters, vocabulary = None):
+        print "Plotting histogram"
+        if vocabulary is None:
+            vocabulary = mega_histogram
+
+        x_scalar = self.np.arange(n_clusters)
+        y_scalar = self.np.array([abs(self.np.sum(vocabulary[:,h], dtype=self.np.int32)) for h in range(self.n_clusters)])
+
+        self.plt.bar(x_scalar, y_scalar)
+        self.plt.xlabel("Visual Word Index")
+        self.plt.ylabel("Frequency")
+        self.plt.title("Vocabulary Generated")
+        self.plt.xticks(x_scalar + 0.4, x_scalar)
+        self.plt.show()
+
+    def standardize(self, mega_histogram, std=None):
+        """
+        standardize is required to normalize the distribution
+        """
+        if std is None:
+            scale = self.StandardScaler().fit(mega_histogram)
+            mega_histogram = scale.transform(mega_histogram)
+        else:
+            print "STD not none. External STD supplied"
+            mega_histogram = std.transform(mega_histogram)
+        return mega_histogram
+
+    def picture_in_BOV (self, picture_path, show_graph):
+        image, image_filtered = self.canny(image_path=picture_path)
+
+        is_gray = True
+        image_kp, image_descriptions = self.feature_sift_generation(image_filtered, is_gray)
+
+        image_clustered = self.kmeans_obj.predict(image_descriptions)
+        # generate vocab for test image
+        clusters = self.np.array( [[ 0 for i in range(self.n_clusters)]])
+        # locate nearest clusters for each of 
+        # the visual word (feature) present in the image
+        # print vocab
+        for each in image_clustered:
+            clusters[0][each] += 1
+        
+        if (show_graph is None) or (show_graph == True):    
+            self.plotHist(clusters, self.n_clusters, None)
+
+        return clusters
+    
+    def train(self, mega_histogram, train_labels):
+        """
+        uses sklearn.svm.SVC classifier (SVM) 
+        """
+        self.clf.fit(mega_histogram, train_labels)
+        print "Training completed"
 
     def feature_processing(self):
         '''
