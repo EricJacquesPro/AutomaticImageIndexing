@@ -13,7 +13,7 @@ class AutomaticImageIndexing:
 
     from xml.dom import minidom
     
-    _version = '0.2'
+    _version = '0.3'
     data_directory = "Data/"
     
     working_directory = '/'
@@ -25,6 +25,8 @@ class AutomaticImageIndexing:
     n_limite_images = 0
     n_limite_directories = 0
     
+    feature_generator = "SIFT"
+    feature_size_min = 31
     n_feature = 200
     n_clusters = 10
     
@@ -51,7 +53,7 @@ class AutomaticImageIndexing:
         self.picture_detail_list = []
         self.clf = self.SVC()
         
-        self.n_clusters = 10
+        self.n_clusters = 100
         self.kmeans_obj = self.KMeans(n_clusters = self.n_clusters)
         self.kmeans_ret = None#self.kmeans_obj.fit_predict(self.np.array([]))
         
@@ -63,9 +65,12 @@ class AutomaticImageIndexing:
     
     
     def read_picture_and_shift_feature_generation(self, with_sub_picture = True):
+        return self.read_picture_and_feature_generation(descriptor_generator="SIFT", with_sub_picture = True)
+        
+    def read_picture_and_feature_generation(self, descriptor_generator="SIFT", with_sub_picture = True):
         label_count = 0
 
-        sift=self.cv.SIFT()
+        #sift=self.cv.SIFT()
         
         if self.n_limite_directories > 0:
             folder_list = self.os.listdir(''.join([self.working_directory, self.annotation_directory]))[0:self.n_limite_directories]
@@ -88,7 +93,11 @@ class AutomaticImageIndexing:
                 anotation_doc = self.minidom.parse(''.join([anotation_directory_path,self.slash,doc]))
                 items = anotation_doc.getElementsByTagName('object')
                 #if espece pas dans name_dict, on ajoute et on incremente label_count
-                temp_desc_list, temp_kp_list, temp_picture_detail_list = self.read_descriptor_picture_from_annotation_file(picture_path, items, with_sub_picture)
+                temp_desc_list, temp_kp_list, temp_picture_detail_list = self.read_descriptor_picture_from_annotation_file(picture_path, 
+                                                                                                                           descriptor_generator,
+                                                                                                                           items,
+                                                                                                                           with_sub_picture
+                                                                                                                          )
                 self.desc_list = self.desc_list + temp_desc_list
                 self.kp_list = self.kp_list + temp_kp_list
                 if with_sub_picture :
@@ -117,7 +126,7 @@ class AutomaticImageIndexing:
                 images.append(row)
         return images
     
-    def read_descriptor_picture_from_annotation_file(self, picture_path, items, with_sub_picture):
+    def read_descriptor_picture_from_annotation_file(self, picture_path, descriptor_generator="SIFT", items=None, with_sub_picture=True):
         desc_list=[]
         kp_list=[]
         picture_details_list=[]
@@ -129,9 +138,9 @@ class AutomaticImageIndexing:
                 row = []
                 image, xmin, ymin, xmax, ymax = self.read_picture_from_annotation_bndbox(picture_path, bndbox)
                 edges = self.canny_from_image(image)
-
-                kps, descriptors = self.feature_sift_generation(edges, is_gray = True, with_sub_picture = with_sub_picture)
-                #print descriptors
+                
+                kps, descriptors = self.feature_generation(edges, is_gray = True, with_sub_picture = with_sub_picture)
+                
                 if((descriptors is not None) and len((descriptors)>0)):
                     #kp, desc = sift.detectAndCompute(gray,None)
                     desc_list.extend(descriptors)
@@ -174,19 +183,13 @@ class AutomaticImageIndexing:
             #image = self.crop_image(image, xmin, ymin, xmax, ymax)
             #print(image)
             return image
-        '''
-        print('---')
-        print(image_path)
-        print('___')
-        print('no image found')
-        '''
+        
         return None
     
     def crop_image(self, image, xmin, ymin, xmax, ymax):
         '''
         crop image with open cv
         '''
-        
         xmin=int(xmin)
         ymin=int(ymin) 
         xmax=int(xmax)
@@ -256,14 +259,39 @@ class AutomaticImageIndexing:
         image_sifted = self.cv.drawKeypoints(image,kp,color=(0,255,0), flags=0)
         return image, image_sifted
     
+    def feature_generation(self, image, is_gray = True, with_sub_picture=False):
+        if self.feature_generator == "ORB":
+            generator = self.cv.ORB(nfeatures=self.n_feature, patchSize=self.feature_size_min)
+        else : 
+            generator = self.cv.SIFT(nfeatures=self.n_feature)
+            
+        if is_gray :
+            gray = image
+        else :
+            gray= self.cv.cvtColor(image,self.cv.COLOR_BGR2GRAY)
+            
+        kp, desc = generator.detectAndCompute(gray,None)   
+        return kp, desc 
+    
     def feature_sift_generation(self, image, is_gray = True, with_sub_picture=False):
+        sift=self.cv.SIFT(nfeatures=self.n_feature)
+        if is_gray :
+            gray = image
+        else :
+            gray= self.cv.cvtColor(image,self.cv.COLOR_BGR2GRAY)
+            
+        kp, desc = sift.detectAndCompute(gray,None)   
+        return kp, desc 
+    
+    def feature_orb_generation(self, image, is_gray = True, with_sub_picture=False):
+        orb=self.cv.ORB(nfeatures=self.n_feature)
+        
         if is_gray :
             gray = image
         else :
             gray= self.cv.cvtColor(image,self.cv.COLOR_BGR2GRAY)
 
-        sift=self.cv.SIFT(nfeatures=self.n_feature)
-        kp, desc = sift.detectAndCompute(gray,None)
+        kp, desc = orb.detectAndCompute(gray,None)
         
         return kp, desc
     
@@ -472,40 +500,94 @@ class AutomaticImageIndexing:
     
     def plot_descriptor_in_cluster_subplot(self, num_cluster, number_column = 10):
         number_descriptor = self.np.count_nonzero(self.kmeans_ret == num_cluster)
-        number_row = int(number_descriptor / number_column)+1
-        fig,axes = self.plt.subplots(
-            nrows = number_row,
-            ncols = number_column, 
-            figsize=(number_column*8,number_row*12),
-            subplot_kw={'xticks': [], 'yticks': []}
-        )
-        current_cloumn = 0
-        current_row = 0
-        list_item = range(len(self.desc_list))
-        for number_item in list_item:
-            current_descriptor_cluster = self.kmeans_ret[number_item]
-            if current_descriptor_cluster == num_cluster:
-                image = self.kp_to_picture(number_item)    
-                if current_cloumn == number_column:
-                    current_row = current_row+1
-                    current_cloumn = 0
-                axes[current_row,current_cloumn].imshow(image,
-                                                        interpolation=None, 
-                                                        cmap='viridis'
-                                                       )
-                current_cloumn = current_cloumn+1
-        #self.plt.title("Decriptor near the cluster")
-        self.plt.show()
+        if number_descriptor > 0:
+            number_row = int(number_descriptor / number_column)+1
+            height = number_row*12
+            width = number_column*8
+            
+            #if height > 84672:
+            print height
+            fig,axes = self.plt.subplots(
+                nrows = number_row,
+                ncols = number_column, 
+                figsize=(width,height),
+                subplot_kw={'xticks': [], 'yticks': []}
+            )
+            current_cloumn = 0
+            current_row = 0
+            list_item = range(len(self.desc_list))
+            for number_item in list_item:
+                current_descriptor_cluster = self.kmeans_ret[number_item]
+                if current_descriptor_cluster == num_cluster:
+                    image = self.kp_to_picture(number_item)    
+                    if current_cloumn == number_column:
+                        current_row = current_row+1
+                        current_cloumn = 0
+                    axes[current_row,current_cloumn].imshow(image,
+                                                            interpolation=None, 
+                                                            cmap='viridis'
+                                                           )
+                    current_cloumn = current_cloumn+1
+            #self.plt.title("Decriptor near the cluster")
+            self.plt.show()
+        else:
+            print("No picture for this cluster. Try an other cluster")
+    
+    def plot_descriptor_in_cluster_subplot_V2(self, num_cluster, number_column = 10):
+        number_descriptor = self.np.count_nonzero(self.kmeans_ret == num_cluster)
+        if number_descriptor > 0:
+            number_row = int(number_descriptor / number_column)+1
+            height = number_row*12
+            width = number_column*8
+            
+            #if height > 84672:
+            print "-------"
+            print height
+            print width
+            print "-------"
+            fig,axes = self.plt.subplots(
+                ncols = number_column, 
+                figsize=(width,12),
+                subplot_kw={'xticks': [], 'yticks': []}
+            )
+            current_cloumn = 0
+            current_row = 0
+            list_item = range(len(self.desc_list))
+            for number_item in list_item:
+                current_descriptor_cluster = self.kmeans_ret[number_item]
+                if current_descriptor_cluster == num_cluster:
+                    image = self.kp_to_picture(number_item)    
+                    if current_cloumn == number_column:
+                        self.plt.show()
+                        fig,axes = self.plt.subplots(
+                            ncols = number_column, 
+                            figsize=(width,12),
+                            subplot_kw={'xticks': [], 'yticks': []}
+                        )
+                        current_cloumn = 0
+                    axes[current_cloumn].imshow(image,
+                                                  interpolation=None, 
+                                                  cmap='viridis'
+                                                 )
+                    current_cloumn = current_cloumn+1
+            #self.plt.title("Decriptor near the cluster")
+            self.plt.show()
+        else:
+            print("No picture for this cluster. Try an other cluster")
     
     def plot_descriptor_in_cluster_individualplot(self, num_cluster):
-        list_item = range(len(self.desc_list))
-        for number_item in list_item:
-            current_descriptor_cluster = self.kmeans_ret[number_item]
-            if current_descriptor_cluster == num_cluster:
-                image = self.kp_to_picture(number_item)    
-                self.plt.figure(figsize=(12,6))
-                self.plt.imshow(image)
-                self.plt.show()
+        number_descriptor = self.np.count_nonzero(self.kmeans_ret == num_cluster)
+        if number_descriptor > 0:
+            list_item = range(len(self.desc_list))
+            for number_item in list_item:
+                current_descriptor_cluster = self.kmeans_ret[number_item]
+                if current_descriptor_cluster == num_cluster:
+                    image = self.kp_to_picture(number_item)    
+                    self.plt.figure(figsize=(12,6))
+                    self.plt.imshow(image)
+                    self.plt.show()
+        else:
+            print("No picture for this cluster. Try an other cluster")
     
     def plot_descriptor_in_cluster(self, num_cluster):
         nombre_desc_cluster = len([ num for num in self.kmeans_ret if num == 1 ])
