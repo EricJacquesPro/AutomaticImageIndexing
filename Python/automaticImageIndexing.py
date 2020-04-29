@@ -8,12 +8,14 @@ class AutomaticImageIndexing:
     #import progressbar
     from sklearn.cluster import MiniBatchKMeans
     from sklearn.cluster import KMeans
+    import sklearn.model_selection as model_selection
+    #from sklearn.model_selection import train_test_split
     from sklearn.preprocessing import StandardScaler
     from sklearn.svm import SVC
 
     from xml.dom import minidom
     
-    _version = '0.3'
+    _version = '0.4'
     data_directory = "Data/"
     
     working_directory = '/'
@@ -67,7 +69,7 @@ class AutomaticImageIndexing:
     def read_picture_and_shift_feature_generation(self, with_sub_picture = True):
         return self.read_picture_and_feature_generation(descriptor_generator="SIFT", with_sub_picture = True)
         
-    def read_picture_and_feature_generation(self, descriptor_generator="SIFT", with_sub_picture = True):
+    def read_picture_and_feature_generation(self, descriptor_generator="SIFT", with_sub_picture = True, version=""):
         label_count = 0
 
         #sift=self.cv.SIFT()
@@ -93,13 +95,14 @@ class AutomaticImageIndexing:
                 anotation_doc = self.minidom.parse(''.join([anotation_directory_path,self.slash,doc]))
                 items = anotation_doc.getElementsByTagName('object')
                 #if espece pas dans name_dict, on ajoute et on incremente label_count
-                temp_desc_list, temp_kp_list, temp_picture_detail_list = self.read_descriptor_picture_from_annotation_file(picture_path, 
-                                                                                                                           descriptor_generator,
-                                                                                                                           items,
-                                                                                                                           with_sub_picture
-                                                                                                                          )
-                self.desc_list = self.desc_list + temp_desc_list
-                self.kp_list = self.kp_list + temp_kp_list
+                if(version == "V2"):
+                    temp_desc_list, temp_kp_list, temp_picture_detail_list = self.read_descriptor_picture_from_annotation_file_V2(picture_path,descriptor_generator,items,with_sub_picture)
+                    self.desc_list = self.desc_list + temp_desc_list
+                    self.kp_list = self.kp_list + temp_kp_list                    
+                else:
+                    temp_desc_list, temp_kp_list, temp_picture_detail_list = self.read_descriptor_picture_from_annotation_file(picture_path,descriptor_generator,items,with_sub_picture)
+                    self.desc_list = self.desc_list + temp_desc_list
+                    self.kp_list = self.kp_list + temp_kp_list
                 if with_sub_picture :
                     self.picture_detail_list = self.picture_detail_list + temp_picture_detail_list
         #dictionary_size = len(self.desc_list)
@@ -149,6 +152,30 @@ class AutomaticImageIndexing:
                     if with_sub_picture :
                         for k in kps:
                             picture_details_list.extend([[picture_path, xmin, ymin, xmax, ymax]] )
+                
+        return desc_list, kp_list, picture_details_list
+    
+    def read_descriptor_picture_from_annotation_file_V2(self, picture_path, descriptor_generator="SIFT", items=None, with_sub_picture=False):
+        desc_list=[]
+        kp_list=[]
+        picture_details_list=[]
+        name=''
+        for element in items:
+            dog_specie = element.getElementsByTagName('name')[0].firstChild.nodeValue
+            bndbox = element.getElementsByTagName('bndbox')[0]
+            row = []
+            image, xmin, ymin, xmax, ymax = self.read_picture_from_annotation_bndbox(picture_path, bndbox)
+            edges = self.canny_from_image(image)
+
+            kps, descriptors = self.feature_generation(edges, is_gray = True, with_sub_picture = with_sub_picture)
+
+            if((descriptors is not None) and len((descriptors)>0)):
+                desc_list.extend(descriptors)
+                kp_list.extend(kps)
+            else:
+                kps=[]
+                descriptors=[]
+            picture_details_list.extend([[picture_path, xmin, ymin, xmax, ymax, kps, descriptors, dog_specie]] )
                 
         return desc_list, kp_list, picture_details_list
 
@@ -270,7 +297,7 @@ class AutomaticImageIndexing:
         else :
             gray= self.cv.cvtColor(image,self.cv.COLOR_BGR2GRAY)
             
-        kp, desc = generator.detectAndCompute(gray,None)   
+        kp, desc = generator.detectAndCompute(gray,None)
         return kp, desc 
     
     def feature_sift_generation(self, image, is_gray = True, with_sub_picture=False):
@@ -636,17 +663,19 @@ class AutomaticImageIndexing:
             mega_histogram = std.transform(mega_histogram)
         return mega_histogram
 
-    def picture_in_BOV (self, picture_path, show_graph):
-        image, image_filtered = self.canny(image_path=picture_path)
-
-        is_gray = True
-        image_kp, image_descriptions, image_partials = self.feature_sift_generation(image_filtered, is_gray, False)
+    def picture_in_BOV (self, picture_path, picture_descriptors, show_graph=None, reload_descriptor=None):
+        if (reload_descriptor is None) or (reload_descriptor == False):
+            image_descriptions = picture_descriptors
+        else:
+            image, image_filtered = self.canny(image_path=picture_path)
+            is_gray = True
+            image_kp, image_descriptions, image_partials = self.feature_sift_generation(image_filtered, is_gray, False)
 
         image_clustered = self.kmeans_obj.predict(image_descriptions)
         # generate vocab for test image
         clusters = self.np.array( [[ 0 for i in range(self.n_clusters)]])
         # locate nearest clusters for each of 
-        # the visual word (feature) present in the image
+        # the visual word (feature) present in the 0:6
         # print vocab
         for each in image_clustered:
             clusters[0][each] += 1
@@ -655,6 +684,30 @@ class AutomaticImageIndexing:
             self.plotHist(clusters, self.n_clusters, None)
 
         return clusters
+    
+    def train_predict(self, with_reload_descriptor=None, with_performance_measure=None):
+        X=[k[6] for k in self.picture_detail_list] # kps save previously
+        X_desc = []
+        for x_temp in X:
+            if (with_reload_descriptor is None) or (with_reload_descriptor == False):
+                X_desc.extend(self.picture_in_BOV(picture_path=None, picture_descriptors=x_temp, show_graph=False))
+            else:
+                X_desc.extend(self.picture_in_BOV(picture_path=x_temp[0], picture_descriptors=None, show_graph=False))
+        del X
+        
+        y=[r[7] for r in self.picture_detail_list] # result save previously
+        X_train, X_test, y_train, y_test = self.model_selection.train_test_split(X_desc, y, test_size=0.25, random_state=42)
+        #X_train, y_train = X_desc, y
+        """
+        uses sklearn.svm.SVC classifier (SVM) 
+        """
+        self.clf.fit(X_train, y_train)
+        
+        if (with_performance_measure is None) or (with_performance_measure == True):
+            score = self.clf.score(X_train, y_train )#X_test, y_test)
+            print"predict score = %s" % score
+        
+        print "Training completed"
     
     def train(self, mega_histogram, train_labels):
         """
