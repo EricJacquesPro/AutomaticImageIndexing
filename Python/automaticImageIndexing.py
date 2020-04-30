@@ -32,6 +32,7 @@ class AutomaticImageIndexing:
     n_feature = 200
     n_clusters = 10
     
+    dog_species = []
     name_dict = {}
     desc_list = []
     kp_list = []
@@ -48,17 +49,24 @@ class AutomaticImageIndexing:
         self.picture_extension = '.jpg'
         self.slash = "/"
         
-        self.name_dict = {}
+        self.clear_data_picture()
+        
+        self.n_clusters = 100
+        self.kmeans_obj = self.KMeans(n_clusters = self.n_clusters)
+        self.kmeans_ret = None#self.kmeans_obj.fit_predict(self.np.array([]))
+    
+    def clear_data_picture(self):
+        '''
+        Clear old data picture
+        '''
+        self.dog_species = []
+        self.name_dict = {}#?
         self.desc_list = []
         self.kp_list = []
         #self.sub_picture_list = []
         self.picture_detail_list = []
         self.clf = self.SVC()
-        
-        self.n_clusters = 100
-        self.kmeans_obj = self.KMeans(n_clusters = self.n_clusters)
-        self.kmeans_ret = None#self.kmeans_obj.fit_predict(self.np.array([]))
-        
+    
     def version(self):
         '''
         Return the version of this class
@@ -73,6 +81,8 @@ class AutomaticImageIndexing:
         label_count = 0
 
         #sift=self.cv.SIFT()
+        
+        self.clear_data_picture()
         
         if self.n_limite_directories > 0:
             folder_list = self.os.listdir(''.join([self.working_directory, self.annotation_directory]))[0:self.n_limite_directories]
@@ -106,8 +116,7 @@ class AutomaticImageIndexing:
                 if with_sub_picture :
                     self.picture_detail_list = self.picture_detail_list + temp_picture_detail_list
         #dictionary_size = len(self.desc_list)
-    
-    
+       
     def read_picture_from_annotation_file(self, picture_path, items):
         # total amount of items
         #bndbox = items[0].getElementsByTagName('bndbox')
@@ -162,6 +171,9 @@ class AutomaticImageIndexing:
         name=''
         for element in items:
             dog_specie = element.getElementsByTagName('name')[0].firstChild.nodeValue
+            if not dog_specie in self.dog_species:
+                self.dog_species.append(dog_specie)
+            id_dog = self.dog_species.index(dog_specie)
             bndbox = element.getElementsByTagName('bndbox')[0]
             row = []
             image, xmin, ymin, xmax, ymax = self.read_picture_from_annotation_bndbox(picture_path, bndbox)
@@ -175,7 +187,7 @@ class AutomaticImageIndexing:
             else:
                 kps=[]
                 descriptors=[]
-            picture_details_list.extend([[picture_path, xmin, ymin, xmax, ymax, kps, descriptors, dog_specie]] )
+            picture_details_list.extend([[picture_path, xmin, ymin, xmax, ymax, kps, descriptors, id_dog]] )
                 
         return desc_list, kp_list, picture_details_list
 
@@ -686,28 +698,53 @@ class AutomaticImageIndexing:
         return clusters
     
     def train_predict(self, with_reload_descriptor=None, with_performance_measure=None):
+        """
+        train to predict and print a score of the prediction (SVM)
+        """
         X=[k[6] for k in self.picture_detail_list] # kps save previously
+        i=0
+        y_desc = []
         X_desc = []
         for x_temp in X:
             if (with_reload_descriptor is None) or (with_reload_descriptor == False):
-                X_desc.extend(self.picture_in_BOV(picture_path=None, picture_descriptors=x_temp, show_graph=False))
+                if (x_temp is not None) and (len(x_temp)>0):
+                    X_desc.extend(self.picture_in_BOV(picture_path=None, picture_descriptors=x_temp))
+                    y_desc.extend([self.picture_detail_list[i][7]])
+                i=i+1
             else:
                 X_desc.extend(self.picture_in_BOV(picture_path=x_temp[0], picture_descriptors=None, show_graph=False))
+                y_desc=[r[7] for r in self.picture_detail_list] # result save previously
         del X
         
-        y=[r[7] for r in self.picture_detail_list] # result save previously
-        X_train, X_test, y_train, y_test = self.model_selection.train_test_split(X_desc, y, test_size=0.25, random_state=42)
-        #X_train, y_train = X_desc, y
-        """
-        uses sklearn.svm.SVC classifier (SVM) 
-        """
+        X_train, X_test, y_train, y_test = self.model_selection.train_test_split(X_desc, y_desc, test_size=0.25, random_state=42)
+        #X_train, y_train = X_desc, y_desc
         self.clf.fit(X_train, y_train)
         
         if (with_performance_measure is None) or (with_performance_measure == True):
-            score = self.clf.score(X_train, y_train )#X_test, y_test)
+            score = self.clf.score(X_test, y_test )#X_test, y_test)
             print"predict score = %s" % score
         
         print "Training completed"
+        
+        
+    def predict(self, filename, show_graph=None):
+        """
+        predict and print a score of the prediction (SVM)
+        """
+        image = self.cv.imread(filename=filename)
+        edges = self.canny_from_image(image)
+
+        kps, descriptors = self.feature_generation(edges, is_gray=True)
+
+        X_desc = self.picture_in_BOV(picture_path=None, picture_descriptors=descriptors, show_graph=show_graph)
+        #self.picture_in_BOV(picture_path=x_temp[0], picture_descriptors=None, show_graph=False)
+        
+        resultat_numerique = self.clf.predict(X_desc)
+        if (len(resultat_numerique)>0) & (resultat_numerique[0]>0) & (resultat_numerique[0]<len(self.dog_species)):
+            return(self.dog_species[int(resultat_numerique)])
+        else:
+            return("prediction impossible dans les especes : %s" % self.dog_species)
+        
     
     def train(self, mega_histogram, train_labels):
         """
